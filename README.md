@@ -1,34 +1,16 @@
-# Mammal Tag
-
-![tag making app](/docs/hat_tag_app.png)
+# Name Tag Maker
 
 ## The problem
 
-I recently visited the Marine Mammal Center in Sasaulito for the first time, and learned that they use 3d printed "hat tags" to tell the seals in their care apart. This is important because seals can look very similar, but each one has their own specific dietary and treatment needs.
+My office is going to be hosting an event, and we wanted to have name tags for the employees that will be around to help out. We wanted to 3d print them. While making one such nametag is easy enough, doing it dozens of times to iterate on sizing and to make one for each person is a hassle.
 
-Here's an example of the tags in use:
+## The what
 
-![seal with hat tag](/docs/hat_tag.png)
+So enter this tool, which makes a 3d model with various options. You can set the text, of course, but you can also tweak the sizing, amount of fillet, etc. You can also specify a custom image (SVG) and font (TTF) for the app to use. Once set, the image and font will persist between runs.
 
-Image source (and more information) [here](https://www.marinemammalcenter.org/news/new-hat-tags-improve-animal-care-while-leading-the-way-toward-a-greener-future)
+You can make tags one at a time and save them as STLs, but that would still be a hassle. You can also load a CSV file of names and have the app make all of them at once. If you do that, it will create each nametag and arrange them such they fill your print bed (220x220 by default, but settable in "Settings"). 
 
-## The why
-
-I tend to think that the world needs more hyper-specialized CAD tools. There are tons of people and processes that could benefit from customized 3d models, but actually using CAD tools is a huge ask. Much better to have tools that provide only the options that are strictly necessary.
-
-This tool allows the user to specify the following (all dimensions in millimeters):
-
-- the base plate's depth and thickness (defaults: 30 × 4); its width is calculated from the image, the name and the margins
-- the corner radius and the fillet on the plate's top edges
-- an SVG image, placed at the left side of the plate, and the font for the name (both chosen under File → Settings…, and copied into the app's storage)
-- a name, placed to the right of the image
-- how far the image and name are raised above the plate
-- the diameter and depth of two magnet pockets in the bottom (made 0.4 mm wider than the magnet for a press fit)
-- the image size (it shrinks automatically if it doesn't fit); the name is scaled to fill the plate's depth, inside the margin
-
-It creates a 3d model of a rounded, filleted plate with the image and name raised on top, and allows the user to download the result as a 3d printable STL file.
-
-To make a batch, use File → Load CSV… with a list of names (each cell is one name). The tags are packed onto print beds of the size set in File → Settings…, and saving writes one STL per bed (`<name>_1.stl`, `<name>_2.stl`, …).
+Once you have your full collection of tags, you can export them, and the app will save a single STL for each print bed.
 
 ## The how
 
