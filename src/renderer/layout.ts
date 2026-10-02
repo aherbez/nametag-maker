@@ -2,73 +2,83 @@ import type { BedSettings } from "../shared/types";
 
 export interface Placement {
   bed: number;
-  /** Tag center, relative to its bed's center (X across, Z front to back). */
+  /** Part center, relative to its bed's center (X across, Z front to back). */
   x: number;
   z: number;
 }
 
 export interface BedLayout {
-  /** One entry per tag; null for tags too big to fit on a bed. */
+  /** One entry per part; null for parts too big to fit on a bed. */
   placements: (Placement | null)[];
   beds: number;
 }
 
-/**
- * Pack tags onto print beds in rows: left to right until a row is full,
- * then the next row back to front, then a new bed. Tags all share the same
- * depth but vary in width. Each bed's block of tags is centered on it.
- */
-export function layoutTags(
-  widths: number[],
-  depth: number,
-  bed: BedSettings,
-): BedLayout {
-  const { width: bedW, height: bedH, spacing } = bed;
-  const rowsPerBed = Math.floor((bedH + spacing) / (depth + spacing));
+/** A part's footprint on the bed. */
+export interface Footprint {
+  width: number;
+  depth: number;
+}
 
-  // First pass: assign each tag a bed, row, and left edge.
-  const slots: ({ bed: number; row: number; left: number } | null)[] = [];
-  let bedIndex = 0;
-  let row = 0;
+export function fitsOnBed(part: Footprint, bed: BedSettings): boolean {
+  return part.width <= bed.width && part.depth <= bed.height;
+}
+
+/**
+ * Pack parts onto print beds in rows, in order: left to right until a row
+ * is full, then the next row back to front, then a new bed. Each row is as
+ * deep as its deepest part, and parts are centered front to back within
+ * their row. Each bed's block of parts is centered on it.
+ */
+export function layoutParts(parts: Footprint[], bed: BedSettings): BedLayout {
+  const { width: bedW, height: bedH, spacing } = bed;
+
+  // First pass: assign each part a row and a left edge, and size the rows.
+  const rows: { bed: number; top: number; depth: number }[] = [];
+  const slots: ({ row: number; left: number } | null)[] = [];
   let x = 0;
-  let used = false;
-  for (const w of widths) {
-    if (rowsPerBed < 1 || w > bedW) {
+  for (const part of parts) {
+    if (!fitsOnBed(part, bed)) {
       slots.push(null);
       continue;
     }
-    if (x > 0 && x + w > bedW) {
-      row++;
+    let row = rows[rows.length - 1];
+    if (row && x > 0 && x + part.width > bedW) {
+      // Wrap to a new row behind this one.
+      row = { bed: row.bed, top: row.top + row.depth + spacing, depth: 0 };
+      rows.push(row);
       x = 0;
     }
-    if (row >= rowsPerBed) {
-      bedIndex++;
-      row = 0;
+    if (!row || row.top + Math.max(row.depth, part.depth) > bedH) {
+      // Start a new bed.
+      row = { bed: row ? row.bed + 1 : 0, top: 0, depth: 0 };
+      rows.push(row);
+      x = 0;
     }
-    slots.push({ bed: bedIndex, row, left: x });
-    x += w + spacing;
-    used = true;
+    row.depth = Math.max(row.depth, part.depth);
+    slots.push({ row: rows.length - 1, left: x });
+    x += part.width + spacing;
   }
-  const beds = used ? bedIndex + 1 : 0;
+  const beds = rows.length > 0 ? rows[rows.length - 1].bed + 1 : 0;
 
   // Measure each bed's block so it can be centered.
   const blockW = new Array(beds).fill(0);
-  const rowsUsed = new Array(beds).fill(0);
+  const blockH = new Array(beds).fill(0);
   slots.forEach((slot, i) => {
     if (!slot) return;
-    blockW[slot.bed] = Math.max(blockW[slot.bed], slot.left + widths[i]);
-    rowsUsed[slot.bed] = Math.max(rowsUsed[slot.bed], slot.row + 1);
+    const row = rows[slot.row];
+    blockW[row.bed] = Math.max(blockW[row.bed], slot.left + parts[i].width);
+    blockH[row.bed] = Math.max(blockH[row.bed], row.top + row.depth);
   });
 
   const placements = slots.map((slot, i) => {
     if (!slot) return null;
-    const blockH = rowsUsed[slot.bed] * (depth + spacing) - spacing;
-    const offsetX = (bedW - blockW[slot.bed]) / 2;
-    const offsetZ = (bedH - blockH) / 2;
+    const row = rows[slot.row];
+    const offsetX = (bedW - blockW[row.bed]) / 2;
+    const offsetZ = (bedH - blockH[row.bed]) / 2;
     return {
-      bed: slot.bed,
-      x: -bedW / 2 + offsetX + slot.left + widths[i] / 2,
-      z: -bedH / 2 + offsetZ + slot.row * (depth + spacing) + depth / 2,
+      bed: row.bed,
+      x: -bedW / 2 + offsetX + slot.left + parts[i].width / 2,
+      z: -bedH / 2 + offsetZ + row.top + row.depth / 2,
     };
   });
 

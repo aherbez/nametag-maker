@@ -1,7 +1,12 @@
 import { ipcMain } from "electron";
 import path from "path";
-import type { BuildResult, MeshData, NametagParams } from "../shared/types";
-import { buildNametag } from "./nametag";
+import type {
+  BackingResult,
+  BuildResult,
+  MeshData,
+  NametagParams,
+} from "../shared/types";
+import { buildBacking, buildNametag } from "./nametag";
 import { resolveFont } from "./settings";
 
 // OpenCascade is loaded once and cached for the lifetime of the process.
@@ -112,12 +117,31 @@ export function registerCadHandlers(): void {
         );
         return { mesh: shapeToMesh(oc, shape), width, warnings };
       } catch (e) {
-        // OpenCascade throws raw numbers (C++ exception pointers), which
-        // don't survive IPC meaningfully — wrap them in a real Error.
-        throw new Error(
-          e instanceof Error ? e.message : `OpenCascade error (${String(e)})`,
-        );
+        throw ocError(e);
       }
     },
+  );
+
+  ipcMain.handle(
+    "cad:build-backing",
+    async (_event, params: NametagParams): Promise<BackingResult> => {
+      const oc = await getOC();
+      try {
+        const { shape, ...rest } = buildBacking(oc, params);
+        return { mesh: shape ? shapeToMesh(oc, shape) : null, ...rest };
+      } catch (e) {
+        throw ocError(e);
+      }
+    },
+  );
+}
+
+/**
+ * OpenCascade throws raw numbers (C++ exception pointers), which don't
+ * survive IPC meaningfully — wrap them in a real Error.
+ */
+function ocError(e: unknown): Error {
+  return new Error(
+    e instanceof Error ? e.message : `OpenCascade error (${String(e)})`,
   );
 }

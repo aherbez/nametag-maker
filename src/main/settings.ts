@@ -36,7 +36,10 @@ const numericParams = [
   "margin",
   "imageSize",
   "magnetDiameter",
-  "magnetDepth",
+  "magnetHeight",
+  "magnetSpacing",
+  "backingDepth",
+  "backingHeight",
 ] as const satisfies readonly (keyof ControlParams)[];
 
 /**

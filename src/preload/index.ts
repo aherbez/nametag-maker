@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
+  BackingResult,
   BuildResult,
   BedSettings,
   ControlParams,
@@ -14,6 +15,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   platform: process.platform,
   buildNametag: (params: NametagParams): Promise<BuildResult> =>
     ipcRenderer.invoke("cad:build-nametag", params),
+  buildBacking: (params: NametagParams): Promise<BackingResult> =>
+    ipcRenderer.invoke("cad:build-backing", params),
   onExportSTL: (callback: () => void): (() => void) => {
     ipcRenderer.removeAllListeners("export-stl");
     ipcRenderer.on("export-stl", callback);

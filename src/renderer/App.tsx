@@ -48,7 +48,10 @@ const defaultParams: ControlParams = {
   text: "Name",
   imageSize: 20,
   magnetDiameter: 10,
-  magnetDepth: 2,
+  magnetHeight: 2,
+  magnetSpacing: 40,
+  backingDepth: 0,
+  backingHeight: 1.6,
 };
 
 const defaultImage = svgToPolygons(defaultIconSvg);

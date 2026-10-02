@@ -13,6 +13,10 @@ export interface Polygon {
 
 /** Extra diameter given to magnet pockets so the magnets press-fit. */
 export const MAGNET_CLEARANCE = 0.4;
+/** How much shallower the magnet pockets are than the magnets are tall. */
+export const MAGNET_POCKET_SHORTFALL = 0.4;
+/** How much wider a backing cup's outside is than its inside. */
+export const BACKING_CUP_WALL = 1.2;
 
 export interface NametagParams {
   /**
@@ -42,8 +46,20 @@ export interface NametagParams {
    * slightly larger. 0 for no pockets.
    */
   magnetDiameter: number;
-  /** How deep the magnet pockets go into the bottom. 0 for no pockets. */
-  magnetDepth: number;
+  /**
+   * Height of the magnets; the pockets are made slightly shallower. 0 for
+   * no pockets.
+   */
+  magnetHeight: number;
+  /** Center-to-center distance between the two magnet pockets. */
+  magnetSpacing: number;
+  /**
+   * Size of the magnet backing along Z; 0 for twice the magnet diameter.
+   * (Its width is set by the magnet spacing, the cups, and the margin.)
+   */
+  backingDepth: number;
+  /** Thickness of the magnet backing's plate, below the cups. */
+  backingHeight: number;
   /** Image outlines in arbitrary (SVG) units. Empty for no image. */
   image: Polygon[];
   /**
@@ -72,6 +88,15 @@ export interface BuildResult {
   mesh: MeshData;
   /** The plate's calculated width. */
   width: number;
+  warnings: string[];
+}
+
+/** The magnet backing that goes with every tag. */
+export interface BackingResult {
+  /** Null when there's no backing (no magnets, or it couldn't be made). */
+  mesh: MeshData | null;
+  width: number;
+  depth: number;
   warnings: string[];
 }
 

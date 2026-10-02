@@ -8,6 +8,7 @@ import {
 } from "@mui/material";
 import {
   MAGNET_CLEARANCE,
+  MAGNET_POCKET_SHORTFALL,
   type ControlParams,
   type NameList,
   type TagColors,
@@ -60,11 +61,17 @@ export default function Controls({
   };
   const commit = () => onCommit(params);
 
-  const numberField = (key: NumericKey, label: string, min: number) => (
+  const numberField = (
+    key: NumericKey,
+    label: string,
+    min: number,
+    helperText?: string,
+  ) => (
     <TextField
       label={label}
       type="number"
       size="small"
+      helperText={helperText}
       defaultValue={defaults[key]}
       onKeyDown={commitOnEnter}
       onBlur={commit}
@@ -130,11 +137,26 @@ export default function Controls({
 
       <Typography variant="subtitle2">Magnets</Typography>
       <Typography variant="body2" color="text.secondary">
-        Two pockets in the bottom, {MAGNET_CLEARANCE} mm wider than the
-        magnet. Set either value to 0 to leave them out.
+        Two pockets in the bottom, {MAGNET_CLEARANCE} mm wider and{" "}
+        {MAGNET_POCKET_SHORTFALL} mm shallower than the magnet. Set diameter
+        or height to 0 to leave them out.
       </Typography>
       {numberField("magnetDiameter", "Magnet diameter", 0)}
-      {numberField("magnetDepth", "Magnet inset depth", 0)}
+      {numberField("magnetHeight", "Magnet height", 0)}
+      {numberField("magnetSpacing", "Magnet spacing (center to center)", 0)}
+
+      <Typography variant="subtitle2">Magnet backing</Typography>
+      <Typography variant="body2" color="text.secondary">
+        A separate plate, one per tag, with cups that hold the matching
+        magnets. Its width fits both cups with the margin to either side.
+      </Typography>
+      {numberField(
+        "backingDepth",
+        "Backing depth",
+        0,
+        "0 for twice the magnet diameter",
+      )}
+      {numberField("backingHeight", "Backing height", 0.1)}
 
       <Typography variant="subtitle2">Preview colors</Typography>
       <Stack direction="row" spacing={2}>

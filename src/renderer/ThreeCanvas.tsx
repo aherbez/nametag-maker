@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
 import type {
+  BackingResult,
   BedSettings,
   BuildResult,
   MeshData,
@@ -10,7 +11,7 @@ import type {
   NametagParams,
   TagColors,
 } from "../shared/types";
-import { layoutTags } from "./layout";
+import { fitsOnBed, layoutParts, type Footprint } from "./layout";
 import { createTagMaterial } from "./tagMaterial";
 
 /** What the sidebar shows about the latest build. */
@@ -39,6 +40,24 @@ export interface BuildJob {
 
 // Space between print beds when several are shown side by side.
 const BED_GAP = 30;
+
+// Space between a single tag and its magnet backing.
+const BACKING_GAP = 5;
+
+/** Build the magnet backing, turning a failure into a warning. */
+async function buildBacking(params: NametagParams): Promise<BackingResult> {
+  try {
+    return await window.electronAPI.buildBacking(params);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    return {
+      mesh: null,
+      width: 0,
+      depth: 0,
+      warnings: [`The magnet backing couldn't be built: ${reason}`],
+    };
+  }
+}
 
 function meshDataToThree(
   data: MeshData,
@@ -145,9 +164,12 @@ export default function ThreeCanvas({
   onBuildResult,
 }: ThreeCanvasProps) {
   const [tagMaterial] = useState(createTagMaterial);
+  // Backings are all one color, so their material gets the base color for
+  // both parts.
+  const [backingMaterial] = useState(createTagMaterial);
   const containerRef = useRef<HTMLDivElement>(null);
-  // Tags go in one group and bed outlines in another, so exports only ever
-  // see tags.
+  // Tags and backings go in one group and bed outlines in another, so
+  // exports only ever see printable parts.
   const [groups, setGroups] = useState<{
     tags: THREE.Group;
     beds: THREE.Group;
@@ -167,12 +189,14 @@ export default function ThreeCanvas({
   // moves the camera.
   const framedFor = useRef<NameList | null | undefined>(undefined);
   const autoFrame = useRef(false);
-  // Built tags by name, valid for one set of params. Lets a bed-size change
-  // (or reloading an overlapping list) re-lay out without rebuilding.
+  // Built tags by name (and the backing they all share), valid for one set
+  // of params. Lets a bed-size change (or reloading an overlapping list)
+  // re-lay out without rebuilding.
   const batchCache = useRef<{
     params: NametagParams | null;
     results: Map<string, BuildResult>;
-  }>({ params: null, results: new Map() });
+    backing: BackingResult | null;
+  }>({ params: null, results: new Map(), backing: null });
   // What's currently on screen, for export.
   const shown = useRef<
     | { kind: "single"; text: string }
@@ -206,13 +230,24 @@ export default function ThreeCanvas({
       onProgress({ done: 0, total: 1 });
       try {
         const result = await window.electronAPI.buildNametag(j.params);
+        const backing = await buildBacking(j.params);
         if (j !== latestJob.current) return;
         disposeChildren(tagGroup);
         disposeChildren(bedGroup);
         tagGroup.add(meshDataToThree(result.mesh, tagMaterial.material));
+        if (backing.mesh) {
+          // In front of the tag, so both export together as one print.
+          const mesh = meshDataToThree(backing.mesh, backingMaterial.material);
+          mesh.position.z =
+            j.params.depth / 2 + BACKING_GAP + backing.depth / 2;
+          tagGroup.add(mesh);
+        }
         tagMaterial.setBaseHeight(j.params.thickness);
         shown.current = { kind: "single", text: j.params.text };
-        onBuildResult({ warnings: result.warnings, width: result.width });
+        onBuildResult({
+          warnings: [...result.warnings, ...backing.warnings],
+          width: result.width,
+        });
         frameCamera();
       } catch (e) {
         if (j !== latestJob.current) return;
@@ -231,34 +266,74 @@ export default function ThreeCanvas({
       shown.current = null;
 
       const meshes: THREE.Mesh[] = [];
-      const widths: number[] = [];
+      const footprints: Footprint[] = [];
+      const backingMeshes: THREE.Mesh[] = [];
       const warnings = new Map<string, string[]>();
       const warn = (w: string, name: string) =>
         warnings.set(w, [...(warnings.get(w) ?? []), name]);
       let beds = 0;
 
-      // Re-place every tag built so far. Each new tag can change how its
-      // bed's block is centered, so earlier positions shift too.
+      if (batchCache.current.params !== j.params) {
+        batchCache.current = {
+          params: j.params,
+          results: new Map(),
+          backing: null,
+        };
+      }
+      const cache = batchCache.current.results;
+
+      // Every tag shares one backing, so it's built once up front.
+      const backing =
+        batchCache.current.backing ?? (await buildBacking(j.params));
+      if (j !== latestJob.current) return;
+      batchCache.current.backing = backing;
+      const backingWarnings = [...backing.warnings];
+      const backingFits = fitsOnBed(backing, j.bed);
+      if (backing.mesh && !backingFits) {
+        backingWarnings.push(
+          `The magnet backing is too big for the ${j.bed.width} × ${j.bed.height} mm bed; left out.`,
+        );
+      }
+      const backingTemplate =
+        backing.mesh && backingFits
+          ? meshDataToThree(backing.mesh, backingMaterial.material)
+          : null;
+
+      // Re-place every part built so far. Each new tag can change how its
+      // bed's block is centered, so earlier positions shift too. Every tag
+      // that fits gets a backing, and the backings all go after the tags.
       const relayout = () => {
-        const layout = layoutTags(widths, j.params.depth, j.bed);
+        if (backingTemplate) {
+          const wanted = footprints.filter((f) => fitsOnBed(f, j.bed)).length;
+          while (backingMeshes.length < wanted) {
+            // Clones share the template's geometry.
+            const mesh = backingTemplate.clone();
+            backingMeshes.push(mesh);
+            tagGroup.add(mesh);
+          }
+        }
+        const parts = [
+          ...meshes.map((mesh, i) => ({ mesh, footprint: footprints[i] })),
+          ...backingMeshes.map((mesh) => ({ mesh, footprint: backing })),
+        ];
+        const layout = layoutParts(
+          parts.map((p) => p.footprint),
+          j.bed,
+        );
         beds = layout.beds;
         layout.placements.forEach((place, i) => {
-          meshes[i].visible = place !== null;
+          const { mesh } = parts[i];
+          mesh.visible = place !== null;
           if (!place) return;
           const bedX = place.bed * (j.bed.width + BED_GAP);
-          meshes[i].position.set(bedX + place.x, 0, place.z);
-          meshes[i].userData.bed = place.bed;
+          mesh.position.set(bedX + place.x, 0, place.z);
+          mesh.userData.bed = place.bed;
         });
         while (bedGroup.children.length < beds) {
           const b = bedGroup.children.length;
           bedGroup.add(makeBedOutline(j.bed, b * (j.bed.width + BED_GAP)));
         }
       };
-
-      if (batchCache.current.params !== j.params) {
-        batchCache.current = { params: j.params, results: new Map() };
-      }
-      const cache = batchCache.current.results;
 
       for (let i = 0; i < names.length; i++) {
         if (j !== latestJob.current) return;
@@ -281,7 +356,7 @@ export default function ThreeCanvas({
         const mesh = meshDataToThree(result.mesh, tagMaterial.material);
         mesh.userData.name = names[i];
         meshes.push(mesh);
-        widths.push(result.width);
+        footprints.push({ width: result.width, depth: j.params.depth });
         tagGroup.add(mesh);
         relayout();
         frameCamera();
@@ -300,7 +375,10 @@ export default function ThreeCanvas({
       }
       shown.current = { kind: "batch", baseName: list.baseName, beds, bed: j.bed };
       onBuildResult({
-        warnings: summarizeWarnings(warnings, names.length),
+        warnings: [
+          ...summarizeWarnings(warnings, names.length),
+          ...backingWarnings,
+        ],
         batch: { tags: placed, beds },
       });
     }
@@ -331,7 +409,8 @@ export default function ThreeCanvas({
   // Colors are display-only, so they apply immediately without a rebuild.
   useEffect(() => {
     tagMaterial.setColors(colors.base, colors.relief);
-  }, [tagMaterial, colors]);
+    backingMaterial.setColors(colors.base, colors.base);
+  }, [tagMaterial, backingMaterial, colors]);
 
   // Listen for "Export as STL" from the File menu (or the Save button).
   useEffect(() => {

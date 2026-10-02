@@ -1,5 +1,6 @@
 /// <reference types="vite/client" />
 import type {
+  BackingResult,
   BuildResult,
   BedSettings,
   ControlParams,
@@ -15,6 +16,7 @@ declare global {
     electronAPI: {
       platform: string;
       buildNametag: (params: NametagParams) => Promise<BuildResult>;
+      buildBacking: (params: NametagParams) => Promise<BackingResult>;
       onExportSTL: (callback: () => void) => () => void;
       onShowAbout: (callback: () => void) => () => void;
       onShowSettings: (callback: () => void) => () => void;

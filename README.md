@@ -8,7 +8,9 @@ My office is going to be hosting an event, and we wanted to have name tags for t
 
 So enter this tool, which makes a 3d model with various options. You can set the text, of course, but you can also tweak the sizing, amount of fillet, etc. You can also specify a custom image (SVG) and font (TTF) for the app to use. Once set, the image and font will persist between runs.
 
-You can make tags one at a time and save them as STLs, but that would still be a hassle. You can also load a CSV file of names and have the app make all of them at once. If you do that, it will create each nametag and arrange them such they fill your print bed (220x220 by default, but settable in "Settings"). 
+The tags have pockets in the bottom for a pair of round magnets, and each tag comes with a separate magnet backing: a thin plate with two cups that hold the matching magnets, to go on the other side of the wearer's shirt. The backing is shown and exported alongside its tag.
+
+You can make tags one at a time and save them as STLs, but that would still be a hassle. You can also load a CSV file of names and have the app make all of them at once. If you do that, it will create each nametag (plus one backing per tag, placed after all the tags) and arrange them such they fill your print bed (220x220 by default, but settable in "Settings"). 
 
 Once you have your full collection of tags, you can export them, and the app will save a single STL for each print bed.
 

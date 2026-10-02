@@ -1,7 +1,9 @@
 import fs from "fs";
 import opentype from "opentype.js";
 import {
+  BACKING_CUP_WALL,
   MAGNET_CLEARANCE,
+  MAGNET_POCKET_SHORTFALL,
   type NametagParams,
   type Polygon,
   type Pt,
@@ -22,6 +24,10 @@ const SINK = 0.1;
 
 // Points closer together than this (in mm) are merged.
 const POINT_TOL = 0.01;
+
+// Fillet radius where a backing cup meets its plate, as a fraction of the
+// cup's height.
+const CUP_FILLET_RATIO = 0.8;
 
 // Number of line segments used to approximate each glyph curve.
 const CURVE_SEGMENTS = 6;
@@ -47,6 +53,7 @@ export function buildNametag(
   // at x = 0: margin, image, margin, text, margin. The plate's width is
   // whatever that adds up to.
   const relief: Polygon[] = [];
+  let textPolys: Polygon[] = [];
   let x = p.margin;
   let hasContent = false;
 
@@ -88,13 +95,11 @@ export function buildNametag(
       if (glyphs.length > 0) {
         const bb = bounds(glyphs);
         const s = usableH / (bb.maxY - bb.minY);
-        relief.push(
-          ...transformPolygons(
-            glyphs,
-            s,
-            x - bb.minX * s,
-            -((bb.minY + bb.maxY) / 2) * s,
-          ),
+        textPolys = transformPolygons(
+          glyphs,
+          s,
+          x - bb.minX * s,
+          -((bb.minY + bb.maxY) / 2) * s,
         );
         x += (bb.maxX - bb.minX) * s + p.margin;
         hasContent = true;
@@ -102,8 +107,14 @@ export function buildNametag(
     }
   }
 
-  // With nothing to show, fall back to a square plate.
-  const width = hasContent ? x : p.depth;
+  // With nothing to show, fall back to a square plate. Either way, the
+  // plate is at least as wide as its magnet backing.
+  const contentWidth = hasContent ? x : p.depth;
+  const width = Math.max(contentWidth, minTagWidth(p));
+  // Center the text in whatever the plate gained beyond the image.
+  relief.push(
+    ...transformPolygons(textPolys, 1, (width - contentWidth) / 2, 0),
+  );
   const base = cutMagnetPockets(
     oc,
     makeBase(oc, p, width, warnings),
@@ -247,7 +258,7 @@ function makeBase(
 
 /**
  * Cut two cylindrical magnet pockets up into the plate's bottom face,
- * centered front to back and half the plate's width apart.
+ * centered front to back and `magnetSpacing` apart (center to center).
  */
 function cutMagnetPockets(
   oc: OC,
@@ -256,16 +267,22 @@ function cutMagnetPockets(
   width: number,
   warnings: string[],
 ): Shape {
-  if (p.magnetDiameter <= 0 || p.magnetDepth <= 0) return base;
+  if (p.magnetDiameter <= 0 || p.magnetHeight <= 0) return base;
 
   const diameter = p.magnetDiameter + MAGNET_CLEARANCE;
+  const pocketDepth = p.magnetHeight - MAGNET_POCKET_SHORTFALL;
   const skip = (reason: string) => {
     warnings.push(`Magnet pockets left out: ${reason}`);
     return base;
   };
-  if (p.magnetDepth >= p.thickness) {
+  if (pocketDepth <= 0) {
     return skip(
-      `the inset depth must be less than the plate thickness (${p.thickness} mm).`,
+      `the magnet height must be more than ${MAGNET_POCKET_SHORTFALL} mm.`,
+    );
+  }
+  if (pocketDepth >= p.thickness) {
+    return skip(
+      `the pockets (${pocketDepth.toFixed(1)} mm deep) must be shallower than the plate thickness (${p.thickness} mm).`,
     );
   }
   if (diameter >= p.depth) {
@@ -273,24 +290,37 @@ function cutMagnetPockets(
       `the pockets (${diameter.toFixed(1)} mm) are wider than the plate is deep.`,
     );
   }
-  if (diameter >= width / 2) {
+  if (p.magnetSpacing <= diameter) {
     return skip(
-      `the plate is too narrow for two ${diameter.toFixed(1)} mm pockets.`,
+      `the spacing must be more than the pocket width (${diameter.toFixed(1)} mm).`,
+    );
+  }
+  if (p.magnetSpacing + diameter >= width) {
+    return skip(
+      `the plate (${width.toFixed(1)} mm wide) is too narrow for pockets ${p.magnetSpacing} mm apart.`,
     );
   }
 
   // Start each cylinder just below the bottom face so the cut never has to
   // deal with exactly coincident faces.
   const below = 0.1;
-  const tools = [-width / 4, width / 4].map(
-    (x) =>
-      new oc.BRepPrimAPI_MakeCylinder_3(
-        new oc.gp_Ax2_3(new oc.gp_Pnt_3(x, -below, 0), new oc.gp_Dir_4(0, 1, 0)),
-        diameter / 2,
-        p.magnetDepth + below,
-      ).Shape(),
+  const tools = [-p.magnetSpacing / 2, p.magnetSpacing / 2].map((x) =>
+    makeCylinder(oc, x, -below, diameter / 2, pocketDepth + below),
   );
+  return cutAll(oc, base, tools) ?? skip("the cut failed.");
+}
 
+/** An upright cylinder whose bottom face is centered at (x, y0, 0). */
+function makeCylinder(oc: OC, x: number, y0: number, r: number, h: number) {
+  return new oc.BRepPrimAPI_MakeCylinder_3(
+    new oc.gp_Ax2_3(new oc.gp_Pnt_3(x, y0, 0), new oc.gp_Dir_4(0, 1, 0)),
+    r,
+    h,
+  ).Shape();
+}
+
+/** Cut every tool out of the base at once; null if the cut fails. */
+function cutAll(oc: OC, base: Shape, tools: Shape[]): Shape | null {
   const args = new oc.TopTools_ListOfShape_1();
   args.Append_1(base);
   const toolList = new oc.TopTools_ListOfShape_1();
@@ -299,8 +329,156 @@ function cutMagnetPockets(
   cut.SetArguments(args);
   cut.SetTools(toolList);
   cut.Build(new oc.Message_ProgressRange_1());
-  if (cut.HasErrors()) return skip("the cut failed.");
-  return cut.Shape();
+  return cut.HasErrors() ? null : cut.Shape();
+}
+
+// ---------------------------------------------------------------------------
+// Magnet backing
+// ---------------------------------------------------------------------------
+
+/** The backing's width: both cups, with the margin clear beyond each. */
+function backingWidth(p: NametagParams): number {
+  const cup = p.magnetDiameter + MAGNET_CLEARANCE + BACKING_CUP_WALL;
+  return p.magnetSpacing + cup + 2 * p.margin;
+}
+
+/** Tags with magnets are never narrower than their backing. */
+function minTagWidth(p: NametagParams): number {
+  return p.magnetDiameter > 0 && p.magnetHeight > 0 ? backingWidth(p) : 0;
+}
+
+/**
+ * Build the backing that holds the matching pair of magnets: a plate like
+ * the tag's base (same corner radius and edge fillet), with two open cups
+ * on top lined up with the tag's pockets. Centered on the origin with its
+ * bottom face at y = 0. `shape` is null when there's no backing to make.
+ */
+export function buildBacking(
+  oc: OC,
+  p: NametagParams,
+): { shape: Shape | null; width: number; depth: number; warnings: string[] } {
+  const warnings: string[] = [];
+  const inner = p.magnetDiameter + MAGNET_CLEARANCE;
+  const outer = inner + BACKING_CUP_WALL;
+  const width = backingWidth(p);
+  const depth = p.backingDepth > 0 ? p.backingDepth : 2 * p.magnetDiameter;
+  const result = (shape: Shape | null) => ({ shape, width, depth, warnings });
+  const skip = (reason: string) => {
+    warnings.push(`Magnet backing left out: ${reason}`);
+    return result(null);
+  };
+
+  if (p.magnetDiameter <= 0 || p.magnetHeight <= 0) return result(null);
+
+  const cupHeight = p.magnetHeight - MAGNET_POCKET_SHORTFALL;
+  if (cupHeight <= 0) {
+    return skip(
+      `the magnet height must be more than ${MAGNET_POCKET_SHORTFALL} mm.`,
+    );
+  }
+  if (p.backingHeight <= 0) {
+    return skip("its height must be more than 0.");
+  }
+  if (p.magnetSpacing < outer) {
+    return skip(
+      `the magnet spacing must be at least the cup width (${outer.toFixed(1)} mm).`,
+    );
+  }
+  if (outer > depth) {
+    warnings.push(
+      `The magnet backing's cups (${outer.toFixed(1)} mm) are wider than the backing is deep (${depth.toFixed(1)} mm).`,
+    );
+  }
+
+  const plateWarnings: string[] = [];
+  const plate = makeBase(
+    oc,
+    { ...p, depth, thickness: p.backingHeight },
+    width,
+    plateWarnings,
+  );
+  warnings.push(...plateWarnings.map((w) => `Magnet backing: ${w}`));
+
+  // Each cup is a tube sunk slightly into the plate, so the plate's top face
+  // is the cup's floor and the fuse never sees coincident faces.
+  const top = p.backingHeight;
+  const cups: Shape[] = [];
+  for (const x of [-p.magnetSpacing / 2, p.magnetSpacing / 2]) {
+    const tube = cutAll(
+      oc,
+      makeCylinder(oc, x, top - SINK, outer / 2, cupHeight + SINK),
+      [makeCylinder(oc, x, top - 2 * SINK, inner / 2, cupHeight + 3 * SINK)],
+    );
+    if (!tube) return skip("the cups couldn't be made.");
+    cups.push(tube);
+  }
+
+  let backing: Shape;
+  try {
+    backing = fuseAll(oc, plate, cups);
+  } catch {
+    return skip("the cups couldn't be attached to the plate.");
+  }
+  return result(
+    filletCupBases(
+      oc,
+      backing,
+      outer / 2,
+      top,
+      cupHeight * CUP_FILLET_RATIO,
+      warnings,
+    ),
+  );
+}
+
+/**
+ * Fillet the circular edges where the cups' outsides meet the plate's top
+ * face (radius `r`, at height `y`). Returns the shape unfilleted, with a
+ * warning, if that fails.
+ */
+function filletCupBases(
+  oc: OC,
+  shape: Shape,
+  r: number,
+  y: number,
+  fillet: number,
+  warnings: string[],
+): Shape {
+  if (fillet <= 0.01) return shape;
+  try {
+    const mkFillet = new oc.BRepFilletAPI_MakeFillet(
+      shape,
+      oc.ChFi3d_FilletShape.ChFi3d_Rational,
+    );
+    // A map visits each edge once, unlike an explorer, which revisits
+    // edges shared between faces.
+    const edges = new oc.TopTools_IndexedMapOfShape_1();
+    oc.TopExp.MapShapes_1(shape, oc.TopAbs_ShapeEnum.TopAbs_EDGE, edges);
+    let found = 0;
+    for (let i = 1; i <= edges.Extent(); i++) {
+      const edge = oc.TopoDS.Edge_1(edges.FindKey(i));
+      const curve = new oc.BRepAdaptor_Curve_2(edge);
+      if (curve.GetType() !== oc.GeomAbs_CurveType.GeomAbs_Circle) continue;
+      const circle = curve.Circle();
+      if (
+        Math.abs(circle.Radius() - r) < POINT_TOL &&
+        Math.abs(circle.Location().Y() - y) < POINT_TOL
+      ) {
+        mkFillet.Add_2(fillet, edge);
+        found++;
+      }
+    }
+    if (found > 0) {
+      mkFillet.Build(new oc.Message_ProgressRange_1());
+      if (mkFillet.IsDone()) return mkFillet.Shape();
+    }
+  } catch {
+    // fall through
+  }
+  warnings.push(
+    "Magnet backing: the fillet around the cups failed; showing them without it.",
+  );
+  return shape;
 }
 
 // ---------------------------------------------------------------------------
