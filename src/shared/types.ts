@@ -94,10 +94,21 @@ export type ImageSetting =
 
 export type FontSetting = { type: "default" } | ({ type: "custom" } & StoredAsset);
 
+/** The printer bed that batches of tags are laid out on. */
+export interface BedSettings {
+  width: number;
+  height: number;
+  /** Gap between neighboring tags. */
+  spacing: number;
+}
+
+export const DEFAULT_BED: BedSettings = { width: 220, height: 220, spacing: 5 };
+
 /** Settings as persisted by the main process. */
 export interface AppSettings {
   image: ImageSetting;
   font: FontSetting;
+  bed: BedSettings;
   /** Saved sidebar values; missing fields fall back to the app defaults. */
   params: Partial<ControlParams>;
   colors: Partial<TagColors>;
@@ -115,4 +126,11 @@ export interface SettingsView extends AppSettings {
 export interface PickedSvg {
   name: string;
   svgText: string;
+}
+
+/** Names loaded from a CSV file, one tag per name. */
+export interface NameList {
+  /** The CSV's file name without its extension, for naming exports. */
+  baseName: string;
+  names: string[];
 }

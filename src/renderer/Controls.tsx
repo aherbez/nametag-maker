@@ -9,8 +9,10 @@ import {
 import {
   MAGNET_CLEARANCE,
   type ControlParams,
+  type NameList,
   type TagColors,
 } from "../shared/types";
+import type { BuildProgress, BuildSummary } from "./ThreeCanvas";
 
 interface ControlsProps {
   /**
@@ -21,9 +23,13 @@ interface ControlsProps {
   colors: TagColors;
   onColorsChange: (colors: TagColors) => void;
   defaults: ControlParams;
-  loading?: boolean;
+  progress: BuildProgress;
   /** Width of the most recent build, which is set by its content. */
   calculatedWidth?: number;
+  /** The loaded CSV, if any; its names replace the Name field. */
+  nameList: NameList | null;
+  batch?: BuildSummary["batch"];
+  onClearList: () => void;
 }
 
 type NumericKey = {
@@ -35,9 +41,13 @@ export default function Controls({
   colors,
   onColorsChange,
   defaults,
-  loading,
+  progress,
   calculatedWidth,
+  nameList,
+  batch,
+  onClearList,
 }: ControlsProps) {
+  const loading = progress !== null;
   const [params, setParams] = useState(defaults);
 
   const set = <K extends keyof ControlParams>(key: K, v: ControlParams[K]) =>
@@ -75,10 +85,14 @@ export default function Controls({
         label="Width (from content)"
         size="small"
         value={
-          calculatedWidth === undefined ? "—" : calculatedWidth.toFixed(1)
+          nameList || calculatedWidth === undefined
+            ? "—"
+            : calculatedWidth.toFixed(1)
         }
         disabled
-        helperText="Margins + image + text"
+        helperText={
+          nameList ? "Varies with each name" : "Margins + image + text"
+        }
       />
       {numberField("depth", "Depth", 5)}
       {numberField("thickness", "Thickness", 0.5)}
@@ -91,14 +105,28 @@ export default function Controls({
 
       {numberField("imageSize", "Image size", 1)}
 
-      <TextField
-        label="Name"
-        size="small"
-        defaultValue={defaults.text}
-        onKeyDown={commitOnEnter}
-        onBlur={commit}
-        onChange={(e) => set("text", e.target.value)}
-      />
+      {nameList ? (
+        <Stack spacing={1}>
+          <Typography variant="body2">
+            Names from <b>{nameList.baseName}</b>: {nameList.names.length}
+            {batch &&
+              !loading &&
+              ` → ${batch.tags} tag${batch.tags === 1 ? "" : "s"} on ${batch.beds} bed${batch.beds === 1 ? "" : "s"}`}
+          </Typography>
+          <Button size="small" variant="outlined" onClick={onClearList}>
+            Clear list (back to one tag)
+          </Button>
+        </Stack>
+      ) : (
+        <TextField
+          label="Name"
+          size="small"
+          defaultValue={params.text}
+          onKeyDown={commitOnEnter}
+          onBlur={commit}
+          onChange={(e) => set("text", e.target.value)}
+        />
+      )}
 
       <Typography variant="subtitle2">Magnets</Typography>
       <Typography variant="body2" color="text.secondary">
@@ -136,7 +164,13 @@ export default function Controls({
         startIcon={loading ? <CircularProgress size={16} /> : undefined}
         onClick={() => window.electronAPI.triggerExportSTL()}
       >
-        {loading ? "Building…" : "Save STL"}
+        {progress
+          ? progress.total > 1
+            ? `Building ${progress.done + 1} of ${progress.total}…`
+            : "Building…"
+          : nameList && batch
+            ? `Save ${batch.beds} STL file${batch.beds === 1 ? "" : "s"}`
+            : "Save STL"}
       </Button>
     </Stack>
   );

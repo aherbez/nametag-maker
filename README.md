@@ -28,6 +28,8 @@ This tool allows the user to specify the following (all dimensions in millimeter
 
 It creates a 3d model of a rounded, filleted plate with the image and name raised on top, and allows the user to download the result as a 3d printable STL file.
 
+To make a batch, use File → Load CSV… with a list of names (each cell is one name). The tags are packed onto print beds of the size set in File → Settings…, and saving writes one STL per bed (`<name>_1.stl`, `<name>_2.stl`, …).
+
 ## The how
 
 This is implemented as an Electron app, using typescript, React, and the MUI library and for the 3d, I'm using ThreeJS for the rendering and camera control.

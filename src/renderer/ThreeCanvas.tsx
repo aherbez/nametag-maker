@@ -2,16 +2,43 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { STLExporter } from "three/examples/jsm/exporters/STLExporter.js";
-import type { MeshData, NametagParams, TagColors } from "../shared/types";
+import type {
+  BedSettings,
+  BuildResult,
+  MeshData,
+  NameList,
+  NametagParams,
+  TagColors,
+} from "../shared/types";
+import { layoutTags } from "./layout";
 import { createTagMaterial } from "./tagMaterial";
 
 /** What the sidebar shows about the latest build. */
 export interface BuildSummary {
   warnings: string[];
-  /** The plate's calculated width; absent if the build failed. */
+  /** The plate's calculated width (single tag only). */
   width?: number;
+  /** Counts for a batch built from a name list. */
+  batch?: { tags: number; beds: number };
   error?: string;
 }
+
+/** Progress of the build in flight, or null when idle. */
+export type BuildProgress = { done: number; total: number } | null;
+
+/**
+ * Everything a build depends on. A new object means a new build; App
+ * memoizes it so unrelated re-renders don't trigger one.
+ */
+export interface BuildJob {
+  params: NametagParams;
+  /** Build one tag per name, laid out on print beds; null for one tag. */
+  names: NameList | null;
+  bed: BedSettings;
+}
+
+// Space between print beds when several are shown side by side.
+const BED_GAP = 30;
 
 function meshDataToThree(
   data: MeshData,
@@ -34,43 +61,131 @@ function meshDataToThree(
   return new THREE.Mesh(geometry, material);
 }
 
+function disposeChildren(group: THREE.Group) {
+  for (const child of group.children) {
+    if (child instanceof THREE.Mesh || child instanceof THREE.Line) {
+      child.geometry.dispose();
+    }
+  }
+  group.clear();
+}
+
+const bedFillMaterial = new THREE.MeshBasicMaterial({ color: 0x25253d });
+const bedLineMaterial = new THREE.LineBasicMaterial({ color: 0x6a6a8a });
+
+/** A flat outline of a print bed, centered at (cx, 0, 0). */
+function makeBedOutline(bed: BedSettings, cx: number): THREE.Object3D {
+  const outline = new THREE.Group();
+  const fill = new THREE.Mesh(
+    new THREE.PlaneGeometry(bed.width, bed.height),
+    bedFillMaterial,
+  );
+  fill.rotation.x = -Math.PI / 2;
+  // Just below the tags' bottom faces so they don't fight for depth.
+  fill.position.set(cx, -0.05, 0);
+  const hw = bed.width / 2;
+  const hh = bed.height / 2;
+  const line = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(cx - hw, 0, -hh),
+      new THREE.Vector3(cx + hw, 0, -hh),
+      new THREE.Vector3(cx + hw, 0, hh),
+      new THREE.Vector3(cx - hw, 0, hh),
+    ]),
+    bedLineMaterial,
+  );
+  outline.add(fill, line);
+  return outline;
+}
+
+/**
+ * Collapse per-tag warnings: one that applies to every tag is shown once;
+ * others list the names they apply to.
+ */
+function summarizeWarnings(
+  byWarning: Map<string, string[]>,
+  tagCount: number,
+): string[] {
+  return [...byWarning].map(([warning, names]) => {
+    if (names.length === tagCount) return warning;
+    const shown = names.slice(0, 3).map((n) => `“${n}”`).join(", ");
+    const more = names.length > 3 ? ` and ${names.length - 3} more` : "";
+    return `${shown}${more}: ${warning}`;
+  });
+}
+
+/** Export a set of meshes as one binary STL, rotated so Z is up. */
+function exportStl(meshes: THREE.Object3D[], offsetX = 0): ArrayBuffer {
+  // The scene is Y-up but slicers expect Z-up: rotate so the plates lie
+  // flat with the text reading correctly from above.
+  const zUp = new THREE.Group();
+  zUp.rotation.x = Math.PI / 2;
+  for (const mesh of meshes) {
+    const copy = mesh.clone();
+    copy.position.x -= offsetX;
+    zUp.add(copy);
+  }
+  zUp.updateMatrixWorld(true);
+  const result = new STLExporter().parse(zUp, { binary: true });
+  return result.buffer as ArrayBuffer;
+}
+
 interface ThreeCanvasProps {
-  params: NametagParams;
+  job: BuildJob;
   colors: TagColors;
-  onLoadingChange: (loading: boolean) => void;
-  /** Called after each rebuild with its outcome. */
+  onProgress: (progress: BuildProgress) => void;
+  /** Called after each build (and as a batch progresses) with its outcome. */
   onBuildResult: (summary: BuildSummary) => void;
 }
 
 export default function ThreeCanvas({
-  params,
+  job,
   colors,
-  onLoadingChange,
+  onProgress,
   onBuildResult,
 }: ThreeCanvasProps) {
   const [tagMaterial] = useState(createTagMaterial);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [group, setGroup] = useState<THREE.Group>();
+  // Tags go in one group and bed outlines in another, so exports only ever
+  // see tags.
+  const [groups, setGroups] = useState<{
+    tags: THREE.Group;
+    beds: THREE.Group;
+  }>();
   const cameraRef = useRef<THREE.PerspectiveCamera>(null);
   const controlsRef = useRef<OrbitControls>(null);
 
-  // Builds run one at a time. Params that change mid-build are picked up
-  // when it finishes; results for params that have since changed are
-  // dropped rather than shown.
-  const latestParams = useRef(params);
-  latestParams.current = params;
+  // Builds run one at a time. A job that changes mid-build is picked up as
+  // soon as the current step finishes; stale results are dropped.
+  const latestJob = useRef(job);
+  latestJob.current = job;
   const building = useRef(false);
-  // Auto-framing stops once the user has moved the camera themselves.
+  // Auto-framing stops once the user has moved the camera themselves (and
+  // resumes when a new name list is loaded).
   const userMovedCamera = useRef(false);
+  // Built tags by name, valid for one set of params. Lets a bed-size change
+  // (or reloading an overlapping list) re-lay out without rebuilding.
+  const batchCache = useRef<{
+    params: NametagParams | null;
+    results: Map<string, BuildResult>;
+  }>({ params: null, results: new Map() });
+  // What's currently on screen, for export.
+  const shown = useRef<
+    | { kind: "single"; text: string }
+    | { kind: "batch"; baseName: string; beds: number; bed: BedSettings }
+    | null
+  >(null);
 
   useEffect(() => {
-    if (!group || building.current) return;
+    if (!groups || building.current) return;
+    const { tags: tagGroup, beds: bedGroup } = groups;
 
     function frameCamera() {
       const camera = cameraRef.current;
       const controls = controlsRef.current;
       if (!camera || !controls || userMovedCamera.current) return;
-      const box = new THREE.Box3().setFromObject(group!);
+      const box = new THREE.Box3().setFromObject(tagGroup);
+      if (bedGroup.children.length > 0) box.expandByObject(bedGroup);
       const center = box.getCenter(new THREE.Vector3());
       const sphere = box.getBoundingSphere(new THREE.Sphere());
       const fov = camera.fov * (Math.PI / 180);
@@ -83,63 +198,158 @@ export default function ThreeCanvas({
       controls.update();
     }
 
+    async function buildSingle(j: BuildJob) {
+      onProgress({ done: 0, total: 1 });
+      try {
+        const result = await window.electronAPI.buildNametag(j.params);
+        if (j !== latestJob.current) return;
+        disposeChildren(tagGroup);
+        disposeChildren(bedGroup);
+        tagGroup.add(meshDataToThree(result.mesh, tagMaterial.material));
+        tagMaterial.setBaseHeight(j.params.thickness);
+        shown.current = { kind: "single", text: j.params.text };
+        onBuildResult({ warnings: result.warnings, width: result.width });
+        frameCamera();
+      } catch (e) {
+        if (j !== latestJob.current) return;
+        onBuildResult({
+          warnings: [],
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    async function buildBatch(j: BuildJob, list: NameList) {
+      const { names } = list;
+      disposeChildren(tagGroup);
+      disposeChildren(bedGroup);
+      tagMaterial.setBaseHeight(j.params.thickness);
+      shown.current = null;
+
+      const meshes: THREE.Mesh[] = [];
+      const widths: number[] = [];
+      const warnings = new Map<string, string[]>();
+      const warn = (w: string, name: string) =>
+        warnings.set(w, [...(warnings.get(w) ?? []), name]);
+      let beds = 0;
+
+      // Re-place every tag built so far. Each new tag can change how its
+      // bed's block is centered, so earlier positions shift too.
+      const relayout = () => {
+        const layout = layoutTags(widths, j.params.depth, j.bed);
+        beds = layout.beds;
+        layout.placements.forEach((place, i) => {
+          meshes[i].visible = place !== null;
+          if (!place) return;
+          const bedX = place.bed * (j.bed.width + BED_GAP);
+          meshes[i].position.set(bedX + place.x, 0, place.z);
+          meshes[i].userData.bed = place.bed;
+        });
+        while (bedGroup.children.length < beds) {
+          const b = bedGroup.children.length;
+          bedGroup.add(makeBedOutline(j.bed, b * (j.bed.width + BED_GAP)));
+        }
+      };
+
+      if (batchCache.current.params !== j.params) {
+        batchCache.current = { params: j.params, results: new Map() };
+      }
+      const cache = batchCache.current.results;
+
+      for (let i = 0; i < names.length; i++) {
+        if (j !== latestJob.current) return;
+        onProgress({ done: i, total: names.length });
+        let result = cache.get(names[i]);
+        if (!result) {
+          try {
+            result = await window.electronAPI.buildNametag({
+              ...j.params,
+              text: names[i],
+            });
+          } catch {
+            warn("Couldn't be built.", names[i]);
+            continue;
+          }
+          cache.set(names[i], result);
+        }
+        if (j !== latestJob.current) return;
+        for (const w of result.warnings) warn(w, names[i]);
+        const mesh = meshDataToThree(result.mesh, tagMaterial.material);
+        mesh.userData.name = names[i];
+        meshes.push(mesh);
+        widths.push(result.width);
+        tagGroup.add(mesh);
+        relayout();
+        frameCamera();
+      }
+
+      const placed = meshes.filter((m) => m.visible).length;
+      if (placed < meshes.length) {
+        meshes
+          .filter((m) => !m.visible)
+          .forEach((m) =>
+            warn(
+              `Too big for the ${j.bed.width} × ${j.bed.height} mm bed; left out.`,
+              m.userData.name,
+            ),
+          );
+      }
+      shown.current = { kind: "batch", baseName: list.baseName, beds, bed: j.bed };
+      onBuildResult({
+        warnings: summarizeWarnings(warnings, names.length),
+        batch: { tags: placed, beds },
+      });
+    }
+
     async function buildLatest() {
       building.current = true;
-      onLoadingChange(true);
-      let built: NametagParams | null = null;
-      while (built !== latestParams.current) {
-        const p: NametagParams = latestParams.current;
-        built = p;
-        try {
-          const result = await window.electronAPI.buildNametag(p);
-          if (p !== latestParams.current) continue;
-          group!.clear();
-          group!.add(meshDataToThree(result.mesh, tagMaterial.material));
-          tagMaterial.setBaseHeight(p.thickness);
-          onBuildResult({ warnings: result.warnings, width: result.width });
-          frameCamera();
-        } catch (e) {
-          if (p !== latestParams.current) continue;
-          onBuildResult({
-            warnings: [],
-            error: e instanceof Error ? e.message : String(e),
-          });
-        }
+      let built: BuildJob | null = null;
+      while (built !== latestJob.current) {
+        const j: BuildJob = latestJob.current;
+        // A newly loaded list gets framed even if the camera was moved.
+        if (j.names !== built?.names) userMovedCamera.current = false;
+        built = j;
+        if (j.names) await buildBatch(j, j.names);
+        else await buildSingle(j);
       }
       building.current = false;
-      onLoadingChange(false);
+      onProgress(null);
     }
 
     buildLatest();
-  }, [group, params]);
+  }, [groups, job]);
 
   // Colors are display-only, so they apply immediately without a rebuild.
   useEffect(() => {
     tagMaterial.setColors(colors.base, colors.relief);
   }, [tagMaterial, colors]);
 
-  // Listen for "Export as STL" from the File menu
+  // Listen for "Export as STL" from the File menu (or the Save button).
   useEffect(() => {
-    if (!group) return;
+    if (!groups) return;
     const handleExport = () => {
-      // The scene is Y-up but slicers expect Z-up: rotate so the plate lies
-      // flat with the text reading correctly from above.
-      const zUp = new THREE.Group();
-      zUp.rotation.x = Math.PI / 2;
-      for (const child of group.children) zUp.add(child.clone());
-      zUp.updateMatrixWorld(true);
-
-      const exporter = new STLExporter();
-      const result = exporter.parse(zUp, { binary: true });
-      const name = params.text.trim().replace(/[^\w-]+/g, "_") || "nametag";
-      window.electronAPI.saveSTL(
-        result.buffer as ArrayBuffer,
-        `nametag_${name}.stl`,
-      );
+      const current = shown.current;
+      if (!current || building.current) return;
+      if (current.kind === "single") {
+        const name = current.text.trim().replace(/[^\w-]+/g, "_") || "nametag";
+        window.electronAPI.saveSTL(
+          exportStl(groups.tags.children),
+          `nametag_${name}.stl`,
+        );
+        return;
+      }
+      // One STL per bed, each positioned relative to its bed's center.
+      const buffers: ArrayBuffer[] = [];
+      for (let b = 0; b < current.beds; b++) {
+        const onBed = groups.tags.children.filter(
+          (m) => m.visible && m.userData.bed === b,
+        );
+        buffers.push(exportStl(onBed, b * (current.bed.width + BED_GAP)));
+      }
+      window.electronAPI.saveSTLBatch(buffers, current.baseName);
     };
-    const cleanup = window.electronAPI.onExportSTL(handleExport);
-    return cleanup;
-  }, [group, params]);
+    return window.electronAPI.onExportSTL(handleExport);
+  }, [groups]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -159,7 +369,8 @@ export default function ThreeCanvas({
         75,
         container!.clientWidth / container!.clientHeight,
         0.1,
-        1000,
+        // Far enough to frame several print beds side by side.
+        10000,
       );
       camera.position.set(-2, 1.5, 2);
       camera.lookAt(0.5, 0.5, 0.5);
@@ -191,8 +402,9 @@ export default function ThreeCanvas({
       cameraRef.current = camera;
       controlsRef.current = controls;
 
-      const modelGroup = new THREE.Group();
-      scene.add(modelGroup);
+      const tagGroup = new THREE.Group();
+      const bedGroup = new THREE.Group();
+      scene.add(tagGroup, bedGroup);
 
       // Start render loop (shows empty scene while OpenCascade loads)
       function animate() {
@@ -211,7 +423,7 @@ export default function ThreeCanvas({
       window.addEventListener("resize", onResize);
       resizeHandler = onResize;
 
-      setGroup(modelGroup);
+      setGroups({ tags: tagGroup, beds: bedGroup });
     }
 
     init();

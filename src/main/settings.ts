@@ -3,13 +3,15 @@ import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import opentype from "opentype.js";
-import type {
-  AppSettings,
-  ControlParams,
-  PickedSvg,
-  SettingsView,
-  StoredAsset,
-  TagColors,
+import {
+  DEFAULT_BED,
+  type AppSettings,
+  type BedSettings,
+  type ControlParams,
+  type PickedSvg,
+  type SettingsView,
+  type StoredAsset,
+  type TagColors,
 } from "../shared/types";
 import { findSystemFont } from "./nametag";
 
@@ -20,6 +22,7 @@ import { findSystemFont } from "./nametag";
 const defaults: AppSettings = {
   image: { type: "default" },
   font: { type: "default" },
+  bed: DEFAULT_BED,
   params: {},
   colors: {},
 };
@@ -49,6 +52,21 @@ function sanitizeParams(raw: unknown): Partial<ControlParams> {
   }
   if (typeof src.text === "string") out.text = src.text.slice(0, 200);
   return out;
+}
+
+function sanitizeBed(raw: unknown): BedSettings {
+  const src = (raw ?? {}) as Record<string, unknown>;
+  const pick = (key: keyof BedSettings, min: number) => {
+    const v = src[key];
+    return typeof v === "number" && Number.isFinite(v) && v >= min
+      ? v
+      : DEFAULT_BED[key];
+  };
+  return {
+    width: pick("width", 1),
+    height: pick("height", 1),
+    spacing: pick("spacing", 0),
+  };
 }
 
 function sanitizeColors(raw: unknown): Partial<TagColors> {
@@ -86,6 +104,7 @@ async function loadSettings(): Promise<AppSettings> {
     cached = {
       ...defaults,
       ...raw,
+      bed: sanitizeBed(raw.bed),
       params: sanitizeParams(raw.params),
       colors: sanitizeColors(raw.colors),
     };
@@ -230,6 +249,10 @@ export function registerSettingsHandlers(): void {
 
   ipcMain.handle("settings:reset-font", async () =>
     update({ font: { type: "default" } }),
+  );
+
+  ipcMain.handle("settings:set-bed", async (_event, bed: unknown) =>
+    update({ bed: sanitizeBed(bed) }),
   );
 
   ipcMain.handle(

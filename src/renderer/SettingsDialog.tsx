@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type KeyboardEvent } from "react";
 import {
   Alert,
   Button,
@@ -7,9 +7,10 @@ import {
   DialogContent,
   DialogTitle,
   Stack,
+  TextField,
   Typography,
 } from "@mui/material";
-import type { SettingsView } from "../shared/types";
+import type { BedSettings, SettingsView } from "../shared/types";
 import { svgToPolygons } from "./svg";
 
 interface SettingsDialogProps {
@@ -34,6 +35,36 @@ export default function SettingsDialog({
 }: SettingsDialogProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // Bed fields are drafts until Enter is pressed or a field loses focus,
+  // matching the sidebar.
+  const [bedDraft, setBedDraft] = useState<BedSettings>(settings.bed);
+  const commitBed = () => {
+    const b = settings.bed;
+    if (
+      bedDraft.width === b.width &&
+      bedDraft.height === b.height &&
+      bedDraft.spacing === b.spacing
+    ) {
+      return;
+    }
+    run(() => window.electronAPI.setBed(bedDraft));
+  };
+  const bedField = (key: keyof BedSettings, label: string, min: number) => (
+    <TextField
+      label={label}
+      type="number"
+      size="small"
+      defaultValue={settings.bed[key]}
+      onKeyDown={(e: KeyboardEvent) => {
+        if (e.key === "Enter") commitBed();
+      }}
+      onBlur={commitBed}
+      onChange={(e) => {
+        const v = parseFloat(e.target.value);
+        if (v >= min) setBedDraft((d) => ({ ...d, [key]: v }));
+      }}
+    />
+  );
 
   const run = async (action: () => Promise<SettingsView | null>) => {
     setBusy(true);
@@ -132,6 +163,19 @@ export default function SettingsDialog({
               >
                 Use default
               </Button>
+            </Stack>
+          </Stack>
+
+          <Stack spacing={1}>
+            <Typography variant="subtitle2">Print bed</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Used when loading names from a CSV (File → Load CSV…): tags are
+              packed onto beds of this size, one STL file per bed.
+            </Typography>
+            <Stack direction="row" spacing={1}>
+              {bedField("width", "Bed width", 1)}
+              {bedField("height", "Bed height", 1)}
+              {bedField("spacing", "Separation", 0)}
             </Stack>
           </Stack>
 

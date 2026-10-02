@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   BuildResult,
+  BedSettings,
   ControlParams,
+  NameList,
   NametagParams,
   PickedSvg,
   SettingsView,
@@ -40,6 +42,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("settings:reset-font"),
   saveControls: (params: ControlParams, colors: TagColors): Promise<void> =>
     ipcRenderer.invoke("settings:save-controls", params, colors),
+  setBed: (bed: BedSettings): Promise<SettingsView> =>
+    ipcRenderer.invoke("settings:set-bed", bed),
+  onCsvLoaded: (callback: (list: NameList) => void): (() => void) => {
+    ipcRenderer.removeAllListeners("csv-loaded");
+    ipcRenderer.on("csv-loaded", (_event, list: NameList) => callback(list));
+    return () => ipcRenderer.removeAllListeners("csv-loaded");
+  },
+  saveSTLBatch: (buffers: ArrayBuffer[], baseName: string): Promise<boolean> =>
+    ipcRenderer.invoke("cad:save-stl-batch", buffers, baseName),
   triggerExportSTL: (fileName?: string): void => {
     ipcRenderer.emit("export-stl", fileName);
   },

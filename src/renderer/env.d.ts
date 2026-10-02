@@ -1,7 +1,9 @@
 /// <reference types="vite/client" />
 import type {
   BuildResult,
+  BedSettings,
   ControlParams,
+  NameList,
   NametagParams,
   PickedSvg,
   SettingsView,
@@ -23,6 +25,9 @@ declare global {
       pickFont: () => Promise<SettingsView | null>;
       resetFont: () => Promise<SettingsView>;
       saveControls: (params: ControlParams, colors: TagColors) => Promise<void>;
+      setBed: (bed: BedSettings) => Promise<SettingsView>;
+      onCsvLoaded: (callback: (list: NameList) => void) => () => void;
+      saveSTLBatch: (buffers: ArrayBuffer[], baseName: string) => Promise<boolean>;
       triggerExportSTL: (fileName?: string) => void;
       saveSTL: (buffer: ArrayBuffer, fileName?: string) => Promise<boolean>;
     };

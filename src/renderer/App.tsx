@@ -13,15 +13,21 @@ import {
   Box,
   Alert,
 } from "@mui/material";
-import ThreeCanvas, { type BuildSummary } from "./ThreeCanvas";
+import ThreeCanvas, {
+  type BuildJob,
+  type BuildProgress,
+  type BuildSummary,
+} from "./ThreeCanvas";
 import Controls from "./Controls";
 import SettingsDialog from "./SettingsDialog";
-import type {
-  ControlParams,
-  NametagParams,
-  Polygon,
-  SettingsView,
-  TagColors,
+import {
+  DEFAULT_BED,
+  type ControlParams,
+  type NameList,
+  type NametagParams,
+  type Polygon,
+  type SettingsView,
+  type TagColors,
 } from "../shared/types";
 import { svgToPolygons } from "./svg";
 import defaultIconSvg from "./assets/default-icon.svg?raw";
@@ -77,7 +83,9 @@ export default function App() {
   const [settings, setSettings] = useState<SettingsView>();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [colors, setColors] = useState(defaultColors);
-  const [loading, setLoading] = useState(false);
+  // Names from a loaded CSV; while set, one tag is built per name.
+  const [nameList, setNameList] = useState<NameList | null>(null);
+  const [progress, setProgress] = useState<BuildProgress>(null);
   const [build, setBuild] = useState<BuildSummary>({ warnings: [] });
   const [aboutOpen, setAboutOpen] = useState(false);
 
@@ -95,6 +103,8 @@ export default function App() {
     });
     return window.electronAPI.onShowSettings(() => setSettingsOpen(true));
   }, []);
+
+  useEffect(() => window.electronAPI.onCsvLoaded(setNameList), []);
 
   const commitParams = (next: ControlParams) => {
     // Pressing Enter without changing anything shouldn't rebuild.
@@ -119,10 +129,21 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [colors]);
 
+  // Settings arrive as a fresh object after every change (even to the bed),
+  // so key the image and font on their stored file ids. That keeps params
+  // stable when only unrelated settings change, which lets the canvas reuse
+  // tags it has already built.
+  const imageKey = settings
+    ? settings.image.type === "custom"
+      ? `custom:${settings.image.file}`
+      : settings.image.type
+    : null;
   const image = useMemo(
     () => (settings ? imageFromSettings(settings) : null),
-    [settings],
+    [imageKey],
   );
+  const fontFile =
+    settings?.font.type === "custom" ? settings.font.file : null;
 
   // Hold off building until settings have loaded, so the first build
   // already uses the saved image and font.
@@ -132,11 +153,18 @@ export default function App() {
         ? {
             ...controlParams,
             image,
-            fontFile:
-              settings.font.type === "custom" ? settings.font.file : null,
+            fontFile,
           }
         : null,
-    [controlParams, settings, image],
+    [controlParams, settings !== undefined, image, fontFile],
+  );
+
+  const bed = settings?.bed ?? DEFAULT_BED;
+  const bedKey = `${bed.width}x${bed.height}+${bed.spacing}`;
+  const job = useMemo<BuildJob | null>(
+    () => (params ? { params, names: nameList, bed } : null),
+    // The bed only matters when there's a list to lay out.
+    [params, nameList, nameList ? bedKey : null],
   );
 
   return (
@@ -145,11 +173,11 @@ export default function App() {
       <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
         <Stack direction="row" sx={{ flex: 1, minHeight: 0 }}>
           <Box sx={{ flex: 1, overflow: "hidden", position: "relative" }}>
-            {params && (
+            {job && (
               <ThreeCanvas
-                params={params}
+                job={job}
                 colors={colors}
-                onLoadingChange={setLoading}
+                onProgress={setProgress}
                 onBuildResult={setBuild}
               />
             )}
@@ -168,8 +196,11 @@ export default function App() {
                 colors={colors}
                 onColorsChange={setColors}
                 defaults={controlParams}
-                loading={loading}
+                progress={progress}
                 calculatedWidth={build.width}
+                nameList={nameList}
+                batch={build.batch}
+                onClearList={() => setNameList(null)}
               />
             )}
             {build.error && (
