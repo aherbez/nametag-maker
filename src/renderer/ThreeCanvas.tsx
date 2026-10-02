@@ -160,9 +160,13 @@ export default function ThreeCanvas({
   const latestJob = useRef(job);
   latestJob.current = job;
   const building = useRef(false);
-  // Auto-framing stops once the user has moved the camera themselves (and
-  // resumes when a new name list is loaded).
-  const userMovedCamera = useRef(false);
+  // The camera is framed automatically only for the first model shown and
+  // when a name list is loaded or cleared; ordinary updates leave the view
+  // alone. `framedFor` is the list (null for a single tag) the view was last
+  // framed for; `autoFrame` stays on until that build finishes or the user
+  // moves the camera.
+  const framedFor = useRef<NameList | null | undefined>(undefined);
+  const autoFrame = useRef(false);
   // Built tags by name, valid for one set of params. Lets a bed-size change
   // (or reloading an overlapping list) re-lay out without rebuilding.
   const batchCache = useRef<{
@@ -183,7 +187,7 @@ export default function ThreeCanvas({
     function frameCamera() {
       const camera = cameraRef.current;
       const controls = controlsRef.current;
-      if (!camera || !controls || userMovedCamera.current) return;
+      if (!camera || !controls || !autoFrame.current) return;
       const box = new THREE.Box3().setFromObject(tagGroup);
       if (bedGroup.children.length > 0) box.expandByObject(bedGroup);
       const center = box.getCenter(new THREE.Vector3());
@@ -306,11 +310,16 @@ export default function ThreeCanvas({
       let built: BuildJob | null = null;
       while (built !== latestJob.current) {
         const j: BuildJob = latestJob.current;
-        // A newly loaded list gets framed even if the camera was moved.
-        if (j.names !== built?.names) userMovedCamera.current = false;
+        if (j.names !== framedFor.current) {
+          framedFor.current = j.names;
+          autoFrame.current = true;
+        }
         built = j;
         if (j.names) await buildBatch(j, j.names);
         else await buildSingle(j);
+        // Only stop once the job actually finished; a superseded one hands
+        // framing on to its replacement.
+        if (j === latestJob.current) autoFrame.current = false;
       }
       building.current = false;
       onProgress(null);
@@ -395,7 +404,7 @@ export default function ThreeCanvas({
       controls.update();
       // "start" fires only for user interaction, not programmatic moves.
       controls.addEventListener("start", () => {
-        userMovedCamera.current = true;
+        autoFrame.current = false;
       });
       controlsInstance = controls;
 

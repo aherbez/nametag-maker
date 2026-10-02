@@ -43,7 +43,7 @@ const defaultParams: ControlParams = {
   thickness: 4,
   cornerRadius: 4,
   edgeFillet: 1,
-  reliefHeight: 1.5,
+  reliefHeight: 1.6,
   margin: 5,
   text: "Name",
   imageSize: 20,
