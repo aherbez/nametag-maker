@@ -189,7 +189,6 @@ export default function App() {
             direction="column"
             sx={{ width: 300, p: 2, gap: 2, overflowY: "auto" }}
           >
-            <Typography variant="h6">Controls</Typography>
             <Typography variant="body2">
               All dimensions are in millimeters.
             </Typography>

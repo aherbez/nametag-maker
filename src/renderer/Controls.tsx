@@ -43,7 +43,6 @@ export default function Controls({
   onColorsChange,
   defaults,
   progress,
-  calculatedWidth,
   nameList,
   batch,
   onClearList,
@@ -84,80 +83,6 @@ export default function Controls({
 
   return (
     <Stack direction="column" spacing={2}>
-      <Typography variant="body2" color="text.secondary">
-        Changes apply when you press Enter or leave a field.
-      </Typography>
-      <Typography variant="subtitle2">Base plate</Typography>
-      <TextField
-        label="Width (from content)"
-        size="small"
-        value={
-          nameList || calculatedWidth === undefined
-            ? "—"
-            : calculatedWidth.toFixed(1)
-        }
-        disabled
-        helperText={
-          nameList ? "Varies with each name" : "Margins + image + text"
-        }
-      />
-      {numberField("depth", "Depth", 5)}
-      {numberField("thickness", "Thickness", 0.5)}
-      {numberField("cornerRadius", "Corner radius", 0)}
-      {numberField("edgeFillet", "Edge fillet", 0)}
-
-      <Typography variant="subtitle2">Raised image &amp; text</Typography>
-      {numberField("reliefHeight", "Raise height", 0.1)}
-      {numberField("margin", "Margin", 0)}
-
-      {numberField("imageSize", "Image size", 1)}
-
-      {nameList ? (
-        <Stack spacing={1}>
-          <Typography variant="body2">
-            Names from <b>{nameList.baseName}</b>: {nameList.names.length}
-            {batch &&
-              !loading &&
-              ` → ${batch.tags} tag${batch.tags === 1 ? "" : "s"} on ${batch.beds} bed${batch.beds === 1 ? "" : "s"}`}
-          </Typography>
-          <Button size="small" variant="outlined" onClick={onClearList}>
-            Clear list (back to one tag)
-          </Button>
-        </Stack>
-      ) : (
-        <TextField
-          label="Name"
-          size="small"
-          defaultValue={params.text}
-          onKeyDown={commitOnEnter}
-          onBlur={commit}
-          onChange={(e) => set("text", e.target.value)}
-        />
-      )}
-
-      <Typography variant="subtitle2">Magnets</Typography>
-      <Typography variant="body2" color="text.secondary">
-        Two pockets in the bottom, {MAGNET_CLEARANCE} mm wider and{" "}
-        {MAGNET_POCKET_SHORTFALL} mm shallower than the magnet. Set diameter
-        or height to 0 to leave them out.
-      </Typography>
-      {numberField("magnetDiameter", "Magnet diameter", 0)}
-      {numberField("magnetHeight", "Magnet height", 0)}
-      {numberField("magnetSpacing", "Magnet spacing (center to center)", 0)}
-
-      <Typography variant="subtitle2">Magnet backing</Typography>
-      <Typography variant="body2" color="text.secondary">
-        A separate plate, one per tag, with cups that hold the matching
-        magnets. Its width fits both cups with the margin to either side.
-      </Typography>
-      {numberField(
-        "backingDepth",
-        "Backing depth",
-        0,
-        "0 for twice the magnet diameter",
-      )}
-      {numberField("backingHeight", "Backing height", 0.1)}
-
       <Typography variant="subtitle2">Preview colors</Typography>
       <Stack direction="row" spacing={2}>
         <TextField
@@ -194,6 +119,64 @@ export default function Controls({
             ? `Save ${batch.beds} STL file${batch.beds === 1 ? "" : "s"}`
             : "Save STL"}
       </Button>
+      <Typography variant="subtitle2">Raised image &amp; text</Typography>
+      {nameList ? (
+        <Stack spacing={1}>
+          <Typography variant="body2">
+            Names from <b>{nameList.baseName}</b>: {nameList.names.length}
+            {batch &&
+              !loading &&
+              ` → ${batch.tags} tag${batch.tags === 1 ? "" : "s"} on ${batch.beds} bed${batch.beds === 1 ? "" : "s"}`}
+          </Typography>
+          <Button size="small" variant="outlined" onClick={onClearList}>
+            Clear list (back to one tag)
+          </Button>
+        </Stack>
+      ) : (
+        <TextField
+          label="Name"
+          size="small"
+          defaultValue={params.text}
+          onKeyDown={commitOnEnter}
+          onBlur={commit}
+          onChange={(e) => set("text", e.target.value)}
+        />
+      )}
+      {numberField("reliefHeight", "Raise height", 0.1)}
+      {numberField("margin", "Margin", 0)}
+      {numberField("imageSize", "Image size", 1)}
+      
+      <Typography variant="subtitle2">Base plate</Typography>
+      {numberField("depth", "Depth", 5)}
+      {numberField("thickness", "Thickness", 0.5)}
+      {numberField("cornerRadius", "Corner radius", 0)}
+      {numberField("edgeFillet", "Edge fillet", 0)}
+
+      
+
+      <Typography variant="subtitle2">Magnets</Typography>
+      <Typography variant="body2" color="text.secondary">
+        Two pockets in the bottom, {MAGNET_CLEARANCE} mm wider and{" "}
+        {MAGNET_POCKET_SHORTFALL} mm shallower than the magnet. Set diameter
+        or height to 0 to leave them out.
+      </Typography>
+      {numberField("magnetDiameter", "Magnet diameter", 0)}
+      {numberField("magnetHeight", "Magnet height", 0)}
+      {numberField("magnetSpacing", "Magnet spacing (center to center)", 0)}
+
+      <Typography variant="subtitle2">Magnet backing</Typography>
+      <Typography variant="body2" color="text.secondary">
+        A separate plate, one per tag, with cups that hold the matching
+        magnets. Its width fits both cups with the margin to either side.
+      </Typography>
+      {numberField(
+        "backingDepth",
+        "Backing depth",
+        0,
+        "0 for twice the magnet diameter",
+      )}
+      {numberField("backingHeight", "Backing height", 0.1)}
+
     </Stack>
   );
 }
