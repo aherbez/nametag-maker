@@ -29,6 +29,9 @@ const POINT_TOL = 0.01;
 // cup's height.
 const CUP_FILLET_RATIO = 0.8;
 
+// Space kept between descenders or accents and the plate's filleted edges.
+const TEXT_EDGE_CLEARANCE = 0.5;
+
 // Number of line segments used to approximate each glyph curve.
 const CURVE_SEGMENTS = 6;
 
@@ -87,20 +90,42 @@ export function buildNametag(
       }
     }
 
-    // Text: scaled so its outline fills the depth between the margins.
+    // Text: one size for every name, from the font's metrics, and placed
+    // so that a capital "S" is centered vertically (in line with the
+    // image's center). Capitals are as tall as the space between the
+    // margins allows, as long as descenders and accents, which extend into
+    // the margins, stay clear of the plate's filleted top edges.
     const text = p.text.trim();
     if (text) {
-      // The size here is nominal; the outlines are rescaled below.
-      const glyphs = textToPolygons(text, usableH, fontPath);
+      // Twice the margin between the image and the text.
+      if (hasContent) x += p.margin;
+      const metrics = textMetrics(fontPath);
+      const half = usableH / 2;
+      const reach = Math.max(
+        half,
+        p.depth / 2 - Math.max(0, p.edgeFillet) - TEXT_EDGE_CLEARANCE,
+      );
+      const size = metrics
+        ? Math.min(
+            half / metrics.cap,
+            reach / metrics.up,
+            reach / metrics.down,
+          )
+        : usableH;
+      let glyphs = textToPolygons(text, size, fontPath);
       if (glyphs.length > 0) {
+        let s = 1;
+        if (metrics) {
+          glyphs = transformPolygons(glyphs, 1, 0, -metrics.center * size);
+        } else {
+          // Without metrics, fall back to fitting the name's own outline
+          // between the margins.
+          const bb = bounds(glyphs);
+          glyphs = transformPolygons(glyphs, 1, 0, -(bb.minY + bb.maxY) / 2);
+          s = usableH / (bb.maxY - bb.minY);
+        }
         const bb = bounds(glyphs);
-        const s = usableH / (bb.maxY - bb.minY);
-        textPolys = transformPolygons(
-          glyphs,
-          s,
-          x - bb.minX * s,
-          -((bb.minY + bb.maxY) / 2) * s,
-        );
+        textPolys = transformPolygons(glyphs, s, x - bb.minX * s, 0);
         x += (bb.maxX - bb.minX) * s + p.margin;
         hasContent = true;
       }
@@ -342,9 +367,18 @@ function backingWidth(p: NametagParams): number {
   return p.magnetSpacing + cup + 2 * p.margin;
 }
 
+function backingDepth(p: NametagParams): number {
+  return p.backingDepth > 0 ? p.backingDepth : 2 * p.magnetDiameter;
+}
+
+/** Whether the tag has magnets, and so a backing to go with it. */
+function hasBacking(p: NametagParams): boolean {
+  return p.magnetDiameter > 0 && p.magnetHeight > 0;
+}
+
 /** Tags with magnets are never narrower than their backing. */
 function minTagWidth(p: NametagParams): number {
-  return p.magnetDiameter > 0 && p.magnetHeight > 0 ? backingWidth(p) : 0;
+  return hasBacking(p) ? backingWidth(p) : 0;
 }
 
 /**
@@ -361,14 +395,14 @@ export function buildBacking(
   const inner = p.magnetDiameter + MAGNET_CLEARANCE;
   const outer = inner + BACKING_CUP_WALL;
   const width = backingWidth(p);
-  const depth = p.backingDepth > 0 ? p.backingDepth : 2 * p.magnetDiameter;
+  const depth = backingDepth(p);
   const result = (shape: Shape | null) => ({ shape, width, depth, warnings });
   const skip = (reason: string) => {
     warnings.push(`Magnet backing left out: ${reason}`);
     return result(null);
   };
 
-  if (p.magnetDiameter <= 0 || p.magnetHeight <= 0) return result(null);
+  if (!hasBacking(p)) return result(null);
 
   const cupHeight = p.magnetHeight - MAGNET_POCKET_SHORTFALL;
   if (cupHeight <= 0) {
@@ -755,6 +789,46 @@ function getFont(fontPath: string | null): opentype.Font {
     fontCache.set(file, font);
   }
   return font;
+}
+
+// Letters that reach the furthest above and below a font's capitals:
+// ascenders and accented capitals, and descenders.
+const ABOVE_SAMPLE = "bdfhklÅÉÎ";
+const BELOW_SAMPLE = "gjpqy";
+
+/** Font metrics in em units (per unit of font size), Y-up from the baseline. */
+interface TextMetrics {
+  /** Height of the capital "S"'s center. */
+  center: number;
+  /** Half the capital "S"'s height. */
+  cap: number;
+  /** How far the above-sample letters reach above that center. */
+  up: number;
+  /** How far the below-sample letters reach below that center. */
+  down: number;
+}
+
+const metricsCache = new Map<opentype.Font, TextMetrics | null>();
+
+/** Null if the font lacks the Latin letters the metrics are taken from. */
+function textMetrics(fontPath: string | null): TextMetrics | null {
+  const font = getFont(fontPath);
+  if (metricsCache.has(font)) return metricsCache.get(font)!;
+  // opentype.js paths are Y-down, so these boxes are flipped.
+  const box = (text: string) => font.getPath(text, 0, 0, 1).getBoundingBox();
+  const s = box("S");
+  const above = box(ABOVE_SAMPLE);
+  const below = box(BELOW_SAMPLE);
+  let metrics: TextMetrics | null = null;
+  if (!s.isEmpty() && !above.isEmpty() && !below.isEmpty()) {
+    const center = -(s.y1 + s.y2) / 2;
+    const cap = (s.y2 - s.y1) / 2;
+    const up = Math.max(cap, -above.y1 - center);
+    const down = Math.max(cap, center + below.y2);
+    if (cap > 0) metrics = { center, cap, up, down };
+  }
+  metricsCache.set(font, metrics);
+  return metrics;
 }
 
 /** Convert a text string into Y-up polygons, at the given font size. */
