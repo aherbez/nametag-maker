@@ -2,10 +2,14 @@ import { useState, type KeyboardEvent } from "react";
 import {
   Button,
   CircularProgress,
+  IconButton,
   Stack,
+  SvgIcon,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
+import NameListDialog from "./NameListDialog";
 import {
   MAGNET_CLEARANCE,
   MAGNET_POCKET_SHORTFALL,
@@ -31,6 +35,17 @@ interface ControlsProps {
   nameList: NameList | null;
   batch?: BuildSummary["batch"];
   onClearList: () => void;
+  /** Called with names typed into the name list dialog, like a loaded CSV. */
+  onNameList: (list: NameList) => void;
+}
+
+/** Material's "playlist add" icon: lines of text with a plus. */
+function NameListIcon() {
+  return (
+    <SvgIcon>
+      <path d="M14 10H3v2h11zm0-4H3v2h11zm4 8v-4h-2v4h-4v2h4v4h2v-4h4v-2zM3 16h7v-2H3z" />
+    </SvgIcon>
+  );
 }
 
 type NumericKey = {
@@ -46,9 +61,11 @@ export default function Controls({
   nameList,
   batch,
   onClearList,
+  onNameList,
 }: ControlsProps) {
   const loading = progress !== null;
   const [params, setParams] = useState(defaults);
+  const [listOpen, setListOpen] = useState(false);
 
   const set = <K extends keyof ControlParams>(key: K, v: ControlParams[K]) =>
     setParams((p) => ({ ...p, [key]: v }));
@@ -133,15 +150,31 @@ export default function Controls({
           </Button>
         </Stack>
       ) : (
-        <TextField
-          label="Name"
-          size="small"
-          defaultValue={params.text}
-          onKeyDown={commitOnEnter}
-          onBlur={commit}
-          onChange={(e) => set("text", e.target.value)}
-        />
+        <Stack direction="row" spacing={1} alignItems="center">
+          <TextField
+            label="Name"
+            size="small"
+            fullWidth
+            defaultValue={params.text}
+            onKeyDown={commitOnEnter}
+            onBlur={commit}
+            onChange={(e) => set("text", e.target.value)}
+          />
+          <Tooltip title="Input a list of names">
+            <IconButton
+              aria-label="Input a list of names"
+              onClick={() => setListOpen(true)}
+            >
+              <NameListIcon />
+            </IconButton>
+          </Tooltip>
+        </Stack>
       )}
+      <NameListDialog
+        open={listOpen}
+        onClose={() => setListOpen(false)}
+        onGenerate={onNameList}
+      />
       {numberField("reliefHeight", "Raise height", 0.1)}
       {numberField("margin", "Margin", 0)}
       {numberField("imageSize", "Image size", 1)}

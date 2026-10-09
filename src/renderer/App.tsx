@@ -203,6 +203,7 @@ export default function App() {
                 nameList={nameList}
                 batch={build.batch}
                 onClearList={() => setNameList(null)}
+                onNameList={setNameList}
               />
             )}
             {build.error && (

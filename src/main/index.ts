@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { registerCadHandlers } from "./cad";
 import { registerSettingsHandlers } from "./settings";
-import { namesFromCsv } from "./csv";
+import { namesFromCsv } from "../shared/csv";
 import type { NameList } from "../shared/types";
 
 function createWindow(): BrowserWindow {
